@@ -1,36 +1,76 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Research Collaboration Platform
 
-## Getting Started
+Next.js + MySQL + ChromaDB.
 
-First, run the development server:
+| Part | Owner | Contents |
+|------|-------|----------|
+| Person 1 — Research Paper Management | — | `Authors`, `ResearchPapers`, `PaperAuthors` tables; paper CRUD; search by title / author / domain; ChromaDB semantic search; `/papers` pages |
+| Person 2 — Users & Collaboration | Chandana | `Users`, `Bookmarks`, `Collaborations`, `Comments`, `Ratings`; register/login; dashboard; bookmarks; collaboration pages |
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## Setup
+
+1. **Install dependencies**
+   ```bash
+   npm install
+   ```
+2. **Create the database** (safe to re-run; does not touch tables that already exist)
+   ```bash
+   mysql -u root -p < db/schema.sql
+   mysql -u root -p research_collaboration < db/seed.sql   # optional: 9 sample papers
+   ```
+3. **Configure** – copy `.env.example` to `.env.local` and set `DB_PASSWORD`.
+4. **Start ChromaDB** (needs Python 3.9+), in a separate terminal:
+   ```bash
+   pip install chromadb
+   chroma run --path ./chroma_data --port 8000
+   ```
+5. **Run the app**
+   ```bash
+   npm run dev
+   ```
+   Register, log in, open **Research Papers**, then click **Rebuild semantic index** once
+   (needed after loading `seed.sql`; new/edited papers are indexed automatically).
+
+The first semantic search downloads the ~90 MB `all-MiniLM-L6-v2` model, so it needs internet once.
+Without internet, set `EMBEDDING_PROVIDER=hash` (matches shared words only, not meaning).
+If ChromaDB is not running, everything else still works; only semantic search is unavailable.
+
+## Database design (Person 1)
+
+```
+Users 1───< ResearchPapers >───< PaperAuthors >───< Authors
+                  │
+                  ├───< Bookmarks      (Person 2)
+                  ├───< Comments       (Person 2)
+                  └───< Ratings        (Person 2)
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+* `Authors` ↔ `ResearchPapers` is many-to-many through `PaperAuthors` (`author_order` keeps the byline order).
+* `ResearchPapers.uploaded_by` → `Users.user_id` (`ON DELETE SET NULL`).
+* Deleting a paper cascades to its `PaperAuthors`, bookmarks, comments and ratings. Authors left with no papers are removed.
+* `db/schema.sql` also contains the Person 2 tables, reconstructed from their API routes, so a fresh database works end to end.
+  If you already have those tables they are left untouched.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Paper API
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Method & route | Purpose |
+|----------------|---------|
+| `GET /api/papers?title=&author=&domain=&sort=newest\|year\|title&page=&limit=` | List / search (filters combine with AND) |
+| `POST /api/papers` | Add a paper. Body: `user_id, title, domain, authors[{full_name, affiliation}]`, optional `abstract, publication_year, keywords, doi, pdf_url` |
+| `GET /api/papers/:id` | Paper with authors |
+| `PUT /api/papers/:id` | Edit (same body as POST). Only the uploader may edit; papers with no owner (seed data) can be edited by any logged-in user |
+| `DELETE /api/papers/:id` | Delete. Body: `{ user_id }`. Same ownership rule |
+| `GET /api/papers/semantic?q=&limit=` | Semantic search through ChromaDB, ranked with a 0–1 similarity score |
+| `POST /api/papers/reindex` | Body `{ user_id }`. Rebuilds the ChromaDB index from MySQL |
+| `GET /api/papers/domains` | Domains with paper counts (filter dropdown) |
+| `GET /api/authors?q=` | Author name lookup (form autocomplete) |
 
-## Learn More
+MySQL is the source of truth; ChromaDB only stores embeddings (`paper_id` is the Chroma id).
 
-To learn more about Next.js, take a look at the following resources:
+## Pages
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+`/papers` (listing, keyword + semantic search, pagination) · `/papers/new` · `/papers/[id]` (details, bookmark, edit, delete) · `/papers/[id]/edit`
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Notes
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+* Login state lives in `localStorage` and API routes trust the `user_id` sent by the browser (existing design from Person 2). Fine for a course project; a real deployment would use server-side sessions.

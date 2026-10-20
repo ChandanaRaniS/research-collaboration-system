@@ -42,3 +42,5 @@ next-env.d.ts
 
 # ChromaDB vector store
 chroma_data/
+
+chroma_data/
